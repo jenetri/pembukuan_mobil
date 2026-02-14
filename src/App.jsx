@@ -1,10 +1,15 @@
 import { useEffect, useState } from "react";
+import { createClient } from "@supabase/supabase-js";
+import * as XLSX from "xlsx";
+import { saveAs } from "file-saver";
+
+const supabase = createClient(
+  import.meta.env.VITE_SUPABASE_URL,
+  import.meta.env.VITE_SUPABASE_ANON_KEY
+);
 
 function App() {
-const [data, setData] = useState(() => {
-  const saved = localStorage.getItem("transaksi");
-  return saved ? JSON.parse(saved) : [];
-});
+  const [data, setData] = useState([]);
   const [form, setForm] = useState({
     tanggal: "",
     nopol: "",
@@ -12,193 +17,241 @@ const [data, setData] = useState(() => {
     biaya: "",
     hargaJual: "",
   });
-const [editId, setEditId] = useState(null);
-  // format rupiah
+  const [editId, setEditId] = useState(null);
+  const [filterTanggal, setFilterTanggal] = useState("");
+
+  // ===============================
+  // LOAD DATA
+  // ===============================
+  const loadData = async () => {
+    const { data, error } = await supabase
+      .from("transaksi")
+      .select("*")
+      .order("id", { ascending: false });
+
+    if (error) {
+      console.log("Load error:", error);
+    } else {
+      setData(data || []);
+    }
+  };
+
+  useEffect(() => {
+    loadData();
+  }, []);
+
+  // ===============================
+  // FORMAT RUPIAH
+  // ===============================
   const rupiah = (angka) =>
     new Intl.NumberFormat("id-ID", {
       style: "currency",
       currency: "IDR",
     }).format(angka || 0);
 
-  // ambil data dari backend
-  const loadData = () => {
-    fetch("http://localhost:3001/transaksi")
-      .then((res) => res.json())
-      .then((json) => setData(json))
-      .catch((err) => console.error(err));
-  };
+  // ===============================
+  // SIMPAN / UPDATE
+  // ===============================
+  const simpanData = async () => {
+    if (!form.tanggal || !form.nopol) {
+      alert("Isi data dengan lengkap!");
+      return;
+    }
 
-  useEffect(() => {
-  localStorage.setItem("transaksi", JSON.stringify(data));
-}, [data]);
-useEffect(() => {
+    if (editId) {
+      const { error } = await supabase
+        .from("transaksi")
+        .update(form)
+        .eq("id", editId);
+
+      if (error) console.log("Update error:", error);
+
+      setEditId(null);
+    } else {
+      const { error } = await supabase
+        .from("transaksi")
+        .insert([form]); // 🔥 WAJIB ARRAY
+
+      if (error) console.log("Insert error:", error);
+    }
+
+    setForm({
+      tanggal: "",
+      nopol: "",
+      hargaBeli: "",
+      biaya: "",
+      hargaJual: "",
+    });
+
     loadData();
-  }, []);
-
-  // simpan data
-  const simpanData = () => {
-    fetch("http://localhost:3001/transaksi", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        tanggal: form.tanggal,
-        nopol: form.nopol,
-        hargaBeli: Number(form.hargaBeli),
-        biaya: Number(form.biaya),
-        hargaJual: Number(form.hargaJual),
-      }),
-    })
-      .then((res) => res.json())
-      .then(() => {
-        setForm({
-          tanggal: "",
-          nopol: "",
-          hargaBeli: "",
-          biaya: "",
-          hargaJual: "",
-        });
-        loadData();
-      });
   };
 
-  // hapus data
-  const hapusData = (id) => {
-    const yakin = window.confirm("Yakin ingin menghapus data ini?");
+  // ===============================
+  // HAPUS
+  // ===============================
+  const hapusData = async (id) => {
+    const yakin = window.confirm("Yakin hapus?");
     if (!yakin) return;
 
-    fetch(`http://localhost:3001/transaksi/${id}`, {
-      method: "DELETE",
-    })
-      .then((res) => res.json())
-      .then(() => {
-        setData((prev) => prev.filter((item) => item.id !== id));
-      });
+    const { error } = await supabase
+      .from("transaksi")
+      .delete()
+      .eq("id", id);
+
+    if (error) console.log("Delete error:", error);
+
+    loadData();
   };
-// hitung total
-const totalModal = data.reduce(
-  (sum, item) => sum + (item.hargaBeli + item.biaya),
-  0
-);
 
-const totalPenjualan = data.reduce(
-  (sum, item) => sum + item.hargaJual,
-  0
-);
+  // ===============================
+  // EDIT
+  // ===============================
+  const editData = (item) => {
+    setForm({
+      tanggal: item.tanggal,
+      nopol: item.nopol,
+      hargaBeli: item.hargaBeli,
+      biaya: item.biaya,
+      hargaJual: item.hargaJual,
+    });
+    setEditId(item.id);
+  };
 
-const totalLaba = totalPenjualan - totalModal;
+  // ===============================
+  // FILTER
+  // ===============================
+  const filteredData = filterTanggal
+    ? data.filter((d) =>
+        d.tanggal?.startsWith(filterTanggal)
+      )
+    : data;
+
+  // ===============================
+  // TOTAL
+  // ===============================
+  const totalModal = filteredData.reduce(
+    (sum, item) =>
+      sum +
+      (Number(item.hargaBeli) + Number(item.biaya)),
+    0
+  );
+
+  const totalPenjualan = filteredData.reduce(
+    (sum, item) =>
+      sum + Number(item.hargaJual),
+    0
+  );
+
+  const totalLaba = totalPenjualan - totalModal;
+
+  // ===============================
+  // EXPORT EXCEL
+  // ===============================
+  const exportExcel = () => {
+    const ws = XLSX.utils.json_to_sheet(filteredData);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Laporan");
+    const file = XLSX.write(wb, {
+      bookType: "xlsx",
+      type: "array",
+    });
+    saveAs(
+      new Blob([file]),
+      "Laporan_Pembukuan.xlsx"
+    );
+  };
+
   return (
     <div style={{ padding: "20px" }}>
-      <h1>Pembukuan Jual Beli Mobil</h1>
-<h3>Input Transaksi</h3>
+      <h1>Pembukuan Mobil</h1>
 
-<div
-  style={{
-    display: "grid",
-    gap: "8px",
-    maxWidth: "320px",
-    marginBottom: "16px",
-  }}
->
-  <input
-    type="date"
-    value={form.tanggal}
-    onChange={(e) =>
-      setForm({ ...form, tanggal: e.target.value })
-    }
-    style={{ padding: "6px" }}
-  />
+      <h3>Filter Bulan</h3>
+      <input
+        type="month"
+        onChange={(e) =>
+          setFilterTanggal(e.target.value)
+        }
+      />
 
-  <input
-    type="text"
-    placeholder="No Polisi"
-    value={form.nopol}
-    onChange={(e) =>
-      setForm({ ...form, nopol: e.target.value })
-    }
-    style={{ padding: "6px" }}
-  />
-
-  <input
-    type="number"
-    placeholder="Harga Beli"
-    value={form.hargaBeli}
-    onChange={(e) =>
-      setForm({ ...form, hargaBeli: e.target.value })
-    }
-    style={{ padding: "6px" }}
-  />
-
-  <input
-    type="number"
-    placeholder="Biaya"
-    value={form.biaya}
-    onChange={(e) =>
-      setForm({ ...form, biaya: e.target.value })
-    }
-    style={{ padding: "6px" }}
-  />
-
-  <input
-    type="number"
-    placeholder="Harga Jual"
-    value={form.hargaJual}
-    onChange={(e) =>
-      setForm({ ...form, hargaJual: e.target.value })
-    }
-    style={{ padding: "6px" }}
-  />
-
-  <button
-    onClick={simpanData}
-    style={{
-      background: "#2563eb",
-      color: "white",
-      border: "none",
-      padding: "8px",
-      cursor: "pointer",
-    }}
-  >
-    Simpan
-  </button>
-</div>
-<div style={{ marginBottom: "16px" }}>
-  <h3>Ringkasan</h3>
-  <p>Total Modal: <b>{rupiah(totalModal)}</b></p>
-  <p>Total Penjualan: <b>{rupiah(totalPenjualan)}</b></p>
-  <p>
-    Total Laba:{" "}
-    <b style={{ color: totalLaba >= 0 ? "green" : "red" }}>
-      {rupiah(totalLaba)}
-    </b>
-  </p>
-</div>
       <hr />
-<div style={{ overflowX: "auto" }}></div>
-      <table
-  border="1"
-  cellPadding="8"
-  style={{
-    width: "100%",
-    borderCollapse: "collapse",
-    marginTop: "16px",
-    minWidth: "700px",
-  }}
->
+
+      <h3>Input Transaksi</h3>
+
+      <input
+        type="date"
+        value={form.tanggal}
+        onChange={(e) =>
+          setForm({ ...form, tanggal: e.target.value })
+        }
+      />
+      <input
+        placeholder="No Polisi"
+        value={form.nopol}
+        onChange={(e) =>
+          setForm({ ...form, nopol: e.target.value })
+        }
+      />
+      <input
+        type="number"
+        placeholder="Harga Beli"
+        value={form.hargaBeli}
+        onChange={(e) =>
+          setForm({
+            ...form,
+            hargaBeli: e.target.value,
+          })
+        }
+      />
+      <input
+        type="number"
+        placeholder="Biaya"
+        value={form.biaya}
+        onChange={(e) =>
+          setForm({
+            ...form,
+            biaya: e.target.value,
+          })
+        }
+      />
+      <input
+        type="number"
+        placeholder="Harga Jual"
+        value={form.hargaJual}
+        onChange={(e) =>
+          setForm({
+            ...form,
+            hargaJual: e.target.value,
+          })
+        }
+      />
+
+      <button onClick={simpanData}>
+        {editId ? "Update" : "Tambah"}
+      </button>
+
+      <hr />
+
+      <button onClick={exportExcel}>
+        Export Excel
+      </button>
+
+      <table border="1" cellPadding="6">
         <thead>
-  <tr>
-    <th style={{ background: "#f3f4f6" }}>Tanggal</th>
-    <th style={{ background: "#f3f4f6" }}>No Polisi</th>
-    <th style={{ background: "#f3f4f6" }}>Harga Beli</th>
-    <th style={{ background: "#f3f4f6" }}>Biaya</th>
-    <th style={{ background: "#f3f4f6" }}>Harga Jual</th>
-    <th style={{ background: "#f3f4f6" }}>Laba</th>
-    <th style={{ background: "#f3f4f6" }}>Aksi</th>
-  </tr>
-</thead>
+          <tr>
+            <th>Tanggal</th>
+            <th>NoPol</th>
+            <th>Beli</th>
+            <th>Biaya</th>
+            <th>Jual</th>
+            <th>Laba</th>
+            <th>Aksi</th>
+          </tr>
+        </thead>
         <tbody>
-          {data.map((item) => {
+          {filteredData.map((item) => {
             const laba =
-              item.hargaJual - (item.hargaBeli + item.biaya);
+              item.hargaJual -
+              (item.hargaBeli + item.biaya);
 
             return (
               <tr key={item.id}>
@@ -208,23 +261,27 @@ const totalLaba = totalPenjualan - totalModal;
                 <td>{rupiah(item.biaya)}</td>
                 <td>{rupiah(item.hargaJual)}</td>
                 <td
-  style={{
-    color: laba >= 0 ? "green" : "red",
-    fontWeight: "bold",
-  }}
->
-  {rupiah(laba)}
-</td>
+                  style={{
+                    color:
+                      laba >= 0
+                        ? "green"
+                        : "red",
+                  }}
+                >
+                  {rupiah(laba)}
+                </td>
                 <td>
                   <button
-                    onClick={() => hapusData(item.id)}
-                    style={{
-                      background: "red",
-                      color: "white",
-                      border: "none",
-                      padding: "6px 10px",
-                      cursor: "pointer",
-                    }}
+                    onClick={() =>
+                      editData(item)
+                    }
+                  >
+                    Edit
+                  </button>
+                  <button
+                    onClick={() =>
+                      hapusData(item.id)
+                    }
                   >
                     Hapus
                   </button>
@@ -234,7 +291,24 @@ const totalLaba = totalPenjualan - totalModal;
           })}
         </tbody>
       </table>
+
+      <hr />
+
+      <h3>Total</h3>
+      <p>Total Modal: {rupiah(totalModal)}</p>
+      <p>Total Penjualan: {rupiah(totalPenjualan)}</p>
+      <h2
+        style={{
+          color:
+            totalLaba >= 0
+              ? "green"
+              : "red",
+        }}
+      >
+        Total Laba: {rupiah(totalLaba)}
+      </h2>
     </div>
   );
 }
+
 export default App;
