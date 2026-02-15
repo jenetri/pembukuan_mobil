@@ -1,15 +1,14 @@
 import { useEffect, useState } from "react";
-import { createClient } from "@supabase/supabase-js";
+import { supabase } from "./supabaseClient";
+import Login from "./login";
 import * as XLSX from "xlsx";
 import { saveAs } from "file-saver";
 
-const supabase = createClient(
-  import.meta.env.VITE_SUPABASE_URL,
-  import.meta.env.VITE_SUPABASE_ANON_KEY
-);
-
 function App() {
+  const [session, setSession] = useState(null);
   const [data, setData] = useState([]);
+  const [editId, setEditId] = useState(null);
+
   const [form, setForm] = useState({
     tanggal: "",
     nopol: "",
@@ -17,64 +16,64 @@ function App() {
     biaya: "",
     hargaJual: "",
   });
-  const [editId, setEditId] = useState(null);
-  const [filterTanggal, setFilterTanggal] = useState("");
 
-  // ===============================
-  // LOAD DATA
-  // ===============================
-  const loadData = async () => {
-    const { data, error } = await supabase
-      .from("transaksi")
-      .select("*")
-      .order("id", { ascending: false });
-
-    if (error) {
-      console.log("Load error:", error);
-    } else {
-      setData(data || []);
-    }
-  };
-
+  // AUTH
   useEffect(() => {
-    loadData();
+    supabase.auth.getSession().then(({ data }) => {
+      setSession(data.session);
+    });
+
+    const { data: listener } =
+      supabase.auth.onAuthStateChange((_event, session) => {
+        setSession(session);
+      });
+
+    return () => {
+      listener?.subscription.unsubscribe();
+    };
   }, []);
 
-  // ===============================
-  // FORMAT RUPIAH
-  // ===============================
-  const rupiah = (angka) =>
-    new Intl.NumberFormat("id-ID", {
-      style: "currency",
-      currency: "IDR",
-    }).format(angka || 0);
+  useEffect(() => {
+    if (session) loadData();
+  }, [session]);
 
-  // ===============================
-  // SIMPAN / UPDATE
-  // ===============================
+  // LOAD DATA
+  const loadData = async () => {
+    const { data } = await supabase
+      .from("transaksi")
+      .select("*")
+      .eq("user_id", session.user.id)
+      .order("id", { ascending: false });
+
+    setData(data || []);
+  };
+
+  // CRUD
   const simpanData = async () => {
-    if (!form.tanggal || !form.nopol) {
-      alert("Isi data dengan lengkap!");
-      return;
-    }
+    await supabase.from("transaksi").insert([
+      { ...form, user_id: session.user.id },
+    ]);
+    resetForm();
+    loadData();
+  };
 
-    if (editId) {
-      const { error } = await supabase
-        .from("transaksi")
-        .update(form)
-        .eq("id", editId);
+  const updateData = async () => {
+    await supabase
+      .from("transaksi")
+      .update(form)
+      .eq("id", editId);
 
-      if (error) console.log("Update error:", error);
+    setEditId(null);
+    resetForm();
+    loadData();
+  };
 
-      setEditId(null);
-    } else {
-      const { error } = await supabase
-        .from("transaksi")
-        .insert([form]); // 🔥 WAJIB ARRAY
+  const hapusData = async (id) => {
+    await supabase.from("transaksi").delete().eq("id", id);
+    loadData();
+  };
 
-      if (error) console.log("Insert error:", error);
-    }
-
+  const resetForm = () => {
     setForm({
       tanggal: "",
       nopol: "",
@@ -82,231 +81,187 @@ function App() {
       biaya: "",
       hargaJual: "",
     });
-
-    loadData();
   };
 
-  // ===============================
-  // HAPUS
-  // ===============================
-  const hapusData = async (id) => {
-    const yakin = window.confirm("Yakin hapus?");
-    if (!yakin) return;
+  const rupiah = (angka) =>
+    new Intl.NumberFormat("id-ID", {
+      style: "currency",
+      currency: "IDR",
+    }).format(angka || 0);
 
-    const { error } = await supabase
-      .from("transaksi")
-      .delete()
-      .eq("id", id);
+  const totalKeuntungan = data.reduce((total, item) => {
+    return (
+      total +
+      (Number(item.hargaJual || 0) -
+        Number(item.hargaBeli || 0) -
+        Number(item.biaya || 0))
+    );
+  }, 0);
 
-    if (error) console.log("Delete error:", error);
-
-    loadData();
-  };
-
-  // ===============================
-  // EDIT
-  // ===============================
-  const editData = (item) => {
-    setForm({
-      tanggal: item.tanggal,
-      nopol: item.nopol,
-      hargaBeli: item.hargaBeli,
-      biaya: item.biaya,
-      hargaJual: item.hargaJual,
-    });
-    setEditId(item.id);
-  };
-
-  // ===============================
-  // FILTER
-  // ===============================
-  const filteredData = filterTanggal
-    ? data.filter((d) =>
-        d.tanggal?.startsWith(filterTanggal)
-      )
-    : data;
-
-  // ===============================
-  // TOTAL
-  // ===============================
-  const totalModal = filteredData.reduce(
-    (sum, item) =>
-      sum +
-      (Number(item.hargaBeli) + Number(item.biaya)),
-    0
-  );
-
-  const totalPenjualan = filteredData.reduce(
-    (sum, item) =>
-      sum + Number(item.hargaJual),
-    0
-  );
-
-  const totalLaba = totalPenjualan - totalModal;
-
-  // ===============================
-  // EXPORT EXCEL
-  // ===============================
   const exportExcel = () => {
-    const ws = XLSX.utils.json_to_sheet(filteredData);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Laporan");
-    const file = XLSX.write(wb, {
+    const exportData = data.map((item) => ({
+      Tanggal: item.tanggal,
+      NoPol: item.nopol,
+      HargaBeli: item.hargaBeli,
+      Biaya: item.biaya,
+      HargaJual: item.hargaJual,
+      Keuntungan:
+        Number(item.hargaJual || 0) -
+        Number(item.hargaBeli || 0) -
+        Number(item.biaya || 0),
+    }));
+
+    const worksheet = XLSX.utils.json_to_sheet(exportData);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Laporan");
+
+    const excelBuffer = XLSX.write(workbook, {
       bookType: "xlsx",
       type: "array",
     });
-    saveAs(
-      new Blob([file]),
-      "Laporan_Pembukuan.xlsx"
-    );
+
+    const file = new Blob([excelBuffer], {
+      type: "application/octet-stream",
+    });
+
+    saveAs(file, "Laporan_Pembukuan.xlsx");
   };
 
+  if (!session) {
+    return <Login setSession={setSession} />;
+  }
+
   return (
-    <div style={{ padding: "20px" }}>
-      <h1>Pembukuan Mobil</h1>
+    <div className="min-h-screen bg-gray-100 p-6">
+      <div className="max-w-6xl mx-auto">
 
-      <h3>Filter Bulan</h3>
-      <input
-        type="month"
-        onChange={(e) =>
-          setFilterTanggal(e.target.value)
-        }
-      />
+        <div className="flex justify-between items-center mb-6">
+          <h1 className="text-3xl font-bold">
+            Pembukuan Mobil
+          </h1>
 
-      <hr />
+          <div className="flex gap-3">
+            <button
+              onClick={exportExcel}
+              className="bg-green-600 text-white px-4 py-2 rounded-lg"
+            >
+              Export Excel
+            </button>
 
-      <h3>Input Transaksi</h3>
+            <button
+              onClick={() => supabase.auth.signOut()}
+              className="bg-red-500 text-white px-4 py-2 rounded-lg"
+            >
+              Logout
+            </button>
+          </div>
+        </div>
 
-      <input
-        type="date"
-        value={form.tanggal}
-        onChange={(e) =>
-          setForm({ ...form, tanggal: e.target.value })
-        }
-      />
-      <input
-        placeholder="No Polisi"
-        value={form.nopol}
-        onChange={(e) =>
-          setForm({ ...form, nopol: e.target.value })
-        }
-      />
-      <input
-        type="number"
-        placeholder="Harga Beli"
-        value={form.hargaBeli}
-        onChange={(e) =>
-          setForm({
-            ...form,
-            hargaBeli: e.target.value,
-          })
-        }
-      />
-      <input
-        type="number"
-        placeholder="Biaya"
-        value={form.biaya}
-        onChange={(e) =>
-          setForm({
-            ...form,
-            biaya: e.target.value,
-          })
-        }
-      />
-      <input
-        type="number"
-        placeholder="Harga Jual"
-        value={form.hargaJual}
-        onChange={(e) =>
-          setForm({
-            ...form,
-            hargaJual: e.target.value,
-          })
-        }
-      />
+        {/* Summary */}
+        <div className="grid md:grid-cols-2 gap-4 mb-6">
+          <div className="bg-white p-6 rounded-xl shadow">
+            <p className="text-gray-500">Total Transaksi</p>
+            <p className="text-2xl font-bold">
+              {data.length}
+            </p>
+          </div>
 
-      <button onClick={simpanData}>
-        {editId ? "Update" : "Tambah"}
-      </button>
+          <div className="bg-white p-6 rounded-xl shadow">
+            <p className="text-gray-500">Total Keuntungan</p>
+            <p className="text-2xl font-bold text-green-600">
+              {rupiah(totalKeuntungan)}
+            </p>
+          </div>
+        </div>
 
-      <hr />
+        {/* Form */}
+        <div className="bg-white p-6 rounded-xl shadow mb-6 grid md:grid-cols-5 gap-4">
+          <input type="date" value={form.tanggal}
+            onChange={(e)=>setForm({...form,tanggal:e.target.value})}
+            className="border p-2 rounded"/>
 
-      <button onClick={exportExcel}>
-        Export Excel
-      </button>
+          <input placeholder="No Polisi"
+            value={form.nopol}
+            onChange={(e)=>setForm({...form,nopol:e.target.value})}
+            className="border p-2 rounded"/>
 
-      <table border="1" cellPadding="6">
-        <thead>
-          <tr>
-            <th>Tanggal</th>
-            <th>NoPol</th>
-            <th>Beli</th>
-            <th>Biaya</th>
-            <th>Jual</th>
-            <th>Laba</th>
-            <th>Aksi</th>
-          </tr>
-        </thead>
-        <tbody>
-          {filteredData.map((item) => {
-            const laba =
-              item.hargaJual -
-              (item.hargaBeli + item.biaya);
+          <input type="number" placeholder="Harga Beli"
+            value={form.hargaBeli}
+            onChange={(e)=>setForm({...form,hargaBeli:e.target.value})}
+            className="border p-2 rounded"/>
 
-            return (
-              <tr key={item.id}>
-                <td>{item.tanggal}</td>
-                <td>{item.nopol}</td>
-                <td>{rupiah(item.hargaBeli)}</td>
-                <td>{rupiah(item.biaya)}</td>
-                <td>{rupiah(item.hargaJual)}</td>
-                <td
-                  style={{
-                    color:
-                      laba >= 0
-                        ? "green"
-                        : "red",
-                  }}
-                >
-                  {rupiah(laba)}
-                </td>
-                <td>
-                  <button
-                    onClick={() =>
-                      editData(item)
-                    }
-                  >
-                    Edit
-                  </button>
-                  <button
-                    onClick={() =>
-                      hapusData(item.id)
-                    }
-                  >
-                    Hapus
-                  </button>
-                </td>
+          <input type="number" placeholder="Biaya"
+            value={form.biaya}
+            onChange={(e)=>setForm({...form,biaya:e.target.value})}
+            className="border p-2 rounded"/>
+
+          <input type="number" placeholder="Harga Jual"
+            value={form.hargaJual}
+            onChange={(e)=>setForm({...form,hargaJual:e.target.value})}
+            className="border p-2 rounded"/>
+
+          <button
+            onClick={editId ? updateData : simpanData}
+            className="bg-blue-600 text-white py-2 rounded-lg md:col-span-5"
+          >
+            {editId ? "Update Transaksi" : "Tambah Transaksi"}
+          </button>
+        </div>
+
+        {/* Table */}
+        <div className="bg-white rounded-xl shadow overflow-x-auto">
+          <table className="w-full text-left">
+            <thead className="bg-gray-200">
+              <tr>
+                <th className="p-3">Tanggal</th>
+                <th className="p-3">NoPol</th>
+                <th className="p-3">Beli</th>
+                <th className="p-3">Biaya</th>
+                <th className="p-3">Jual</th>
+                <th className="p-3">Untung</th>
+                <th className="p-3">Aksi</th>
               </tr>
-            );
-          })}
-        </tbody>
-      </table>
+            </thead>
+            <tbody>
+              {data.map((item)=>(
+                <tr key={item.id} className="border-t">
+                  <td className="p-3">{item.tanggal}</td>
+                  <td className="p-3">{item.nopol}</td>
+                  <td className="p-3">{rupiah(item.hargaBeli)}</td>
+                  <td className="p-3">{rupiah(item.biaya)}</td>
+                  <td className="p-3">{rupiah(item.hargaJual)}</td>
+                  <td className="p-3 text-green-600 font-semibold">
+                    {rupiah(
+                      Number(item.hargaJual || 0) -
+                      Number(item.hargaBeli || 0) -
+                      Number(item.biaya || 0)
+                    )}
+                  </td>
+                  <td className="p-3 space-x-2">
+                    <button
+                      onClick={()=>{
+                        setForm(item);
+                        setEditId(item.id);
+                      }}
+                      className="bg-yellow-500 text-white px-3 py-1 rounded"
+                    >
+                      Edit
+                    </button>
 
-      <hr />
+                    <button
+                      onClick={()=>hapusData(item.id)}
+                      className="bg-red-500 text-white px-3 py-1 rounded"
+                    >
+                      Hapus
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
 
-      <h3>Total</h3>
-      <p>Total Modal: {rupiah(totalModal)}</p>
-      <p>Total Penjualan: {rupiah(totalPenjualan)}</p>
-      <h2
-        style={{
-          color:
-            totalLaba >= 0
-              ? "green"
-              : "red",
-        }}
-      >
-        Total Laba: {rupiah(totalLaba)}
-      </h2>
+      </div>
     </div>
   );
 }
