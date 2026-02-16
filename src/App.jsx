@@ -1,19 +1,15 @@
 import { useEffect, useState } from "react";
 import { supabase } from "./supabaseClient";
 import Login from "./login";
-import * as XLSX from "xlsx";
-import { saveAs } from "file-saver";
-import jsPDF from "jspdf";
-import autoTable from "jspdf-autotable";
+import FormTransaksi from "./components/FormTransaksi";
+import TableTransaksi from "./components/TableTransaksi";
 
 function App() {
   const [session, setSession] = useState(null);
+  const [companyId, setCompanyId] = useState(null);
   const [role, setRole] = useState(null);
   const [data, setData] = useState([]);
   const [editId, setEditId] = useState(null);
-  const [darkMode, setDarkMode] = useState(false);
-  const [search, setSearch] = useState("");
-  const [filterBulan, setFilterBulan] = useState("");
 
   const [form, setForm] = useState({
     tanggal: "",
@@ -38,23 +34,44 @@ function App() {
     return () => subscription.unsubscribe();
   }, []);
 
-  // ================= LOAD DATA & ROLE =================
+  // ================= FETCH ROLE & COMPANY =================
   useEffect(() => {
     if (session) {
       fetchRole();
-      loadData();
+      fetchCompany();
     }
-  }, [session, role]);
+  }, [session]);
 
   const fetchRole = async () => {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from("profiles")
       .select("role")
       .eq("id", session.user.id)
       .single();
 
-    if (data) setRole(data.role);
+    if (!error && data) {
+      setRole(data.role);
+    }
   };
+
+  const fetchCompany = async () => {
+    const { data, error } = await supabase
+      .from("company_users")
+      .select("company_id")
+      .eq("user_id", session.user.id)
+      .single();
+
+    if (!error && data) {
+      setCompanyId(data.company_id);
+    }
+  };
+
+  // ================= LOAD DATA =================
+  useEffect(() => {
+    if (session && (companyId || role === "super_admin")) {
+      loadData();
+    }
+  }, [companyId, role]);
 
   const loadData = async () => {
     let query = supabase
@@ -62,52 +79,82 @@ function App() {
       .select("*")
       .order("id", { ascending: false });
 
-    if (role !== "admin") {
-      query = query.eq("user_id", session.user.id);
+    // Non super admin hanya lihat company sendiri
+    if (role !== "super_admin") {
+      query = query.eq("company_id", companyId);
     }
 
-    const { data } = await query;
-    setData(data || []);
-  };
+    const { data, error } = await query;
 
-  // ================= ACTIVITY LOG =================
-  const logActivity = async (actionText) => {
-    await supabase.from("activity_logs").insert([
-      {
-        user_id: session.user.id,
-        action: actionText,
-      },
-    ]);
+    if (!error) {
+      setData(data || []);
+    } else {
+      console.log(error);
+    }
   };
 
   // ================= CRUD =================
   const simpanData = async () => {
-    await supabase.from("transaksi").insert([
-      { ...form, user_id: session.user.id },
-    ]);
+    if (!companyId) {
+      alert("Company ID tidak ditemukan");
+      return;
+    }
 
-    await logActivity("Tambah transaksi " + form.nopol);
+    const { error } = await supabase
+      .from("transaksi")
+      .insert([
+        {
+          tanggal: form.tanggal,
+          nopol: form.nopol,
+          hargaBeli: Number(form.hargaBeli),
+          biaya: Number(form.biaya || 0),
+          hargaJual: Number(form.hargaJual),
+          user_id: session.user.id,
+          company_id: companyId,
+        },
+      ]);
 
-    resetForm();
-    loadData();
+    if (error) {
+      console.log(error);
+      alert(error.message);
+    } else {
+      resetForm();
+      loadData();
+    }
   };
 
   const updateData = async () => {
-    await supabase.from("transaksi").update(form).eq("id", editId);
+    const { error } = await supabase
+      .from("transaksi")
+      .update({
+        tanggal: form.tanggal,
+        nopol: form.nopol,
+        hargaBeli: Number(form.hargaBeli),
+        biaya: Number(form.biaya || 0),
+        hargaJual: Number(form.hargaJual),
+      })
+      .eq("id", editId);
 
-    await logActivity("Update transaksi ID " + editId);
-
-    setEditId(null);
-    resetForm();
-    loadData();
+    if (error) {
+      alert(error.message);
+    } else {
+      setEditId(null);
+      resetForm();
+      loadData();
+    }
   };
 
   const hapusData = async (id) => {
-    await supabase.from("transaksi").delete().eq("id", id);
+    const { error } = await supabase
+      .from("transaksi")
+      .delete()
+      .eq("id", id);
 
-    await logActivity("Hapus transaksi ID " + id);
-
-    loadData();
+    if (error) {
+      alert(error.message);
+    } else {
+      loadData();
+    }
   };
 
   const resetForm = () => {
@@ -120,134 +167,49 @@ function App() {
     });
   };
 
-  const rupiah = (angka) =>
-    new Intl.NumberFormat("id-ID", {
-      style: "currency",
-      currency: "IDR",
-    }).format(angka || 0);
-
-  const totalKeuntungan = data.reduce((total, item) => {
-    return (
-      total +
-      (Number(item.hargaJual || 0) -
-        Number(item.hargaBeli || 0) -
-        Number(item.biaya || 0))
-    );
-  }, 0);
-
-  const rataRataUntung =
-    data.length > 0 ? totalKeuntungan / data.length : 0;
-
-  const filteredData = data.filter((item) => {
-    const cocokSearch = item.nopol
-      ?.toLowerCase()
-      .includes(search.toLowerCase());
-
-    const cocokBulan = filterBulan
-      ? item.tanggal?.startsWith(filterBulan)
-      : true;
-
-    return cocokSearch && cocokBulan;
-  });
-
-  // ================= EXPORT EXCEL =================
-  const exportExcel = () => {
-    const worksheet = XLSX.utils.json_to_sheet(filteredData);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, "Laporan");
-
-    const excelBuffer = XLSX.write(workbook, {
-      bookType: "xlsx",
-      type: "array",
-    });
-
-    const file = new Blob([excelBuffer], {
-      type: "application/octet-stream",
-    });
-
-    saveAs(file, "Laporan.xlsx");
-  };
-
-  // ================= EXPORT PDF =================
-  const exportPDF = () => {
-    const doc = new jsPDF();
-    doc.text("Laporan Pembukuan Mobil PRO 4.0", 14, 15);
-
-    autoTable(doc, {
-      startY: 20,
-      head: [["Tanggal","NoPol","Beli","Biaya","Jual","Untung"]],
-      body: filteredData.map(item => [
-        item.tanggal,
-        item.nopol,
-        item.hargaBeli,
-        item.biaya,
-        item.hargaJual,
-        Number(item.hargaJual||0) -
-        Number(item.hargaBeli||0) -
-        Number(item.biaya||0)
-      ])
-    });
-
-    doc.save("Laporan.pdf");
-  };
-
+  // ================= UI =================
   if (!session) return <Login setSession={setSession} />;
 
   return (
-    <div className={darkMode ? "bg-gray-900 text-white min-h-screen p-6" : "bg-gray-100 min-h-screen p-6"}>
+    <div className="min-h-screen bg-gray-100 p-6">
       <div className="max-w-6xl mx-auto">
 
         {/* HEADER */}
-        <div className="flex justify-between items-center mb-6">
+        <div className="flex justify-between mb-6">
+          <h1 className="text-2xl font-bold">
+            Pembukuan Mobil SaaS
+          </h1>
+
           <div>
-            <h1 className="text-3xl font-bold">Pembukuan Mobil PRO 4.0</h1>
-            <p className="text-sm">Role: {role}</p>
-          </div>
+            <span className="mr-4 font-semibold">
+              Role: {role}
+            </span>
 
-          <div className="flex gap-3">
-            <button onClick={()=>setDarkMode(!darkMode)}
-              className="bg-gray-700 text-white px-4 py-2 rounded-lg">
-              Dark Mode
-            </button>
-
-            <button onClick={exportExcel}
-              className="bg-green-600 text-white px-4 py-2 rounded-lg">
-              Excel
-            </button>
-
-            <button onClick={exportPDF}
-              className="bg-purple-600 text-white px-4 py-2 rounded-lg">
-              PDF
-            </button>
-
-            <button onClick={()=>supabase.auth.signOut()}
-              className="bg-red-500 text-white px-4 py-2 rounded-lg">
+            <button
+              onClick={() => supabase.auth.signOut()}
+              className="bg-red-500 text-white px-4 py-2 rounded"
+            >
               Logout
             </button>
           </div>
         </div>
 
-        {/* KPI */}
-        <div className="grid md:grid-cols-3 gap-4 mb-6">
-          <div className="bg-white p-6 rounded-xl shadow">
-            <p>Total Transaksi</p>
-            <p className="text-2xl font-bold">{data.length}</p>
-          </div>
+        {/* FORM */}
+        <FormTransaksi
+          form={form}
+          setForm={setForm}
+          editId={editId}
+          simpanData={simpanData}
+          updateData={updateData}
+        />
 
-          <div className="bg-white p-6 rounded-xl shadow">
-            <p>Total Keuntungan</p>
-            <p className="text-2xl font-bold text-green-600">
-              {rupiah(totalKeuntungan)}
-            </p>
-          </div>
-
-          <div className="bg-white p-6 rounded-xl shadow">
-            <p>Rata-rata Profit</p>
-            <p className="text-2xl font-bold text-blue-600">
-              {rupiah(rataRataUntung)}
-            </p>
-          </div>
-        </div>
+        {/* TABLE */}
+        <TableTransaksi
+          data={data}
+          setEditId={setEditId}
+          setForm={setForm}
+          hapusData={hapusData}
+        />
 
       </div>
     </div>
