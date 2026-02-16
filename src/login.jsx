@@ -17,7 +17,7 @@ export default function Login({ setSession }) {
   };
 
   const register = async () => {
-    const { error } = await supabase.auth.signUp({
+    const { data, error } = await supabase.auth.signUp({
       email,
       password,
     });
@@ -25,7 +25,14 @@ export default function Login({ setSession }) {
     if (error) {
       alert(error.message);
     } else {
-      alert("Registrasi berhasil, silakan login.");
+      await supabase.from("profiles").insert([
+        {
+          id: data.user.id,
+          role: "user",
+        },
+      ]);
+
+      alert("Registrasi berhasil. Silakan login.");
     }
   };
 
@@ -33,7 +40,7 @@ export default function Login({ setSession }) {
     <div className="min-h-screen flex items-center justify-center bg-gray-100">
       <div className="bg-white p-8 rounded-xl shadow w-96">
         <h2 className="text-2xl font-bold mb-6 text-center">
-          Login Pembukuan
+          Login Pembukuan PRO 2.0
         </h2>
 
         <input

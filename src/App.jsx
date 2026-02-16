@@ -3,32 +3,15 @@ import { supabase } from "./supabaseClient";
 import Login from "./login";
 import * as XLSX from "xlsx";
 import { saveAs } from "file-saver";
-
-import {
-  Chart as ChartJS,
-  CategoryScale,
-  LinearScale,
-  BarElement,
-  Title,
-  Tooltip,
-  Legend,
-} from "chart.js";
-
-import { Bar } from "react-chartjs-2";
-
-ChartJS.register(
-  CategoryScale,
-  LinearScale,
-  BarElement,
-  Title,
-  Tooltip,
-  Legend
-);
+import jsPDF from "jspdf";
+import autoTable from "jspdf-autotable";
 
 function App() {
   const [session, setSession] = useState(null);
   const [data, setData] = useState([]);
   const [editId, setEditId] = useState(null);
+  const [role, setRole] = useState(null);
+  const [darkMode, setDarkMode] = useState(false);
 
   const [search, setSearch] = useState("");
   const [filterBulan, setFilterBulan] = useState("");
@@ -56,19 +39,33 @@ function App() {
     return () => subscription.unsubscribe();
   }, []);
 
-  // ================= LOAD DATA =================
+  // ================= LOAD DATA & ROLE =================
   useEffect(() => {
-    if (session) loadData();
+    if (session) {
+      loadData();
+      fetchRole();
+    }
   }, [session]);
 
-  const loadData = async () => {
-    const { data, error } = await supabase
-      .from("transaksi")
-      .select("*")
-      .eq("user_id", session.user.id)
-      .order("id", { ascending: false });
+  const fetchRole = async () => {
+    const { data } = await supabase
+      .from("profiles")
+      .select("role")
+      .eq("id", session.user.id)
+      .single();
 
-    if (!error) setData(data);
+    if (data) setRole(data.role);
+  };
+
+  const loadData = async () => {
+    let query = supabase.from("transaksi").select("*").order("id", { ascending: false });
+
+    if (role !== "admin") {
+      query = query.eq("user_id", session.user.id);
+    }
+
+    const { data } = await query;
+    setData(data || []);
   };
 
   // ================= CRUD =================
@@ -117,7 +114,9 @@ function App() {
     );
   }, 0);
 
-  // ================= FILTER =================
+  const rataRataUntung =
+    data.length > 0 ? totalKeuntungan / data.length : 0;
+
   const filteredData = data.filter((item) => {
     const cocokSearch = item.nopol
       ?.toLowerCase()
@@ -130,35 +129,7 @@ function App() {
     return cocokSearch && cocokBulan;
   });
 
-  // ================= GRAFIK =================
-  const keuntunganBulanan = {};
-
-  data.forEach((item) => {
-    const bulan = item.tanggal?.slice(0, 7);
-    const untung =
-      Number(item.hargaJual || 0) -
-      Number(item.hargaBeli || 0) -
-      Number(item.biaya || 0);
-
-    if (!keuntunganBulanan[bulan]) {
-      keuntunganBulanan[bulan] = 0;
-    }
-
-    keuntunganBulanan[bulan] += untung;
-  });
-
-  const chartData = {
-    labels: Object.keys(keuntunganBulanan),
-    datasets: [
-      {
-        label: "Keuntungan Bulanan",
-        data: Object.values(keuntunganBulanan),
-        backgroundColor: "rgba(34,197,94,0.6)",
-      },
-    ],
-  };
-
-  // ================= EXPORT =================
+  // ================= EXPORT EXCEL =================
   const exportExcel = () => {
     const worksheet = XLSX.utils.json_to_sheet(filteredData);
     const workbook = XLSX.utils.book_new();
@@ -173,155 +144,86 @@ function App() {
       type: "application/octet-stream",
     });
 
-    saveAs(file, "Laporan_Pembukuan.xlsx");
+    saveAs(file, "Laporan.xlsx");
+  };
+
+  // ================= EXPORT PDF =================
+  const exportPDF = () => {
+    const doc = new jsPDF();
+    doc.text("Laporan Pembukuan Mobil PRO 2.0", 14, 15);
+
+    autoTable(doc, {
+      startY: 20,
+      head: [["Tanggal","NoPol","Beli","Biaya","Jual","Untung"]],
+      body: filteredData.map(item => [
+        item.tanggal,
+        item.nopol,
+        item.hargaBeli,
+        item.biaya,
+        item.hargaJual,
+        Number(item.hargaJual||0) -
+        Number(item.hargaBeli||0) -
+        Number(item.biaya||0)
+      ])
+    });
+
+    doc.save("Laporan.pdf");
   };
 
   if (!session) return <Login setSession={setSession} />;
 
   return (
-    <div className="min-h-screen bg-gray-100 p-6">
+    <div className={darkMode ? "bg-gray-900 text-white min-h-screen p-6" : "bg-gray-100 min-h-screen p-6"}>
       <div className="max-w-6xl mx-auto">
 
-        {/* HEADER */}
         <div className="flex justify-between items-center mb-6">
-          <h1 className="text-3xl font-bold">Pembukuan Mobil</h1>
+          <div>
+            <h1 className="text-3xl font-bold">Pembukuan Mobil PRO 2.0</h1>
+            <p className="text-sm">Role: {role}</p>
+          </div>
+
           <div className="flex gap-3">
-            <button
-              onClick={exportExcel}
-              className="bg-green-600 text-white px-4 py-2 rounded-lg"
-            >
-              Export Excel
+            <button onClick={()=>setDarkMode(!darkMode)}
+              className="bg-gray-700 text-white px-4 py-2 rounded-lg">
+              Dark Mode
             </button>
-            <button
-              onClick={() => supabase.auth.signOut()}
-              className="bg-red-500 text-white px-4 py-2 rounded-lg"
-            >
+
+            <button onClick={exportExcel}
+              className="bg-green-600 text-white px-4 py-2 rounded-lg">
+              Excel
+            </button>
+
+            <button onClick={exportPDF}
+              className="bg-purple-600 text-white px-4 py-2 rounded-lg">
+              PDF
+            </button>
+
+            <button onClick={()=>supabase.auth.signOut()}
+              className="bg-red-500 text-white px-4 py-2 rounded-lg">
               Logout
             </button>
           </div>
         </div>
 
-        {/* SUMMARY */}
-        <div className="grid md:grid-cols-2 gap-4 mb-6">
+        <div className="grid md:grid-cols-3 gap-4 mb-6">
           <div className="bg-white p-6 rounded-xl shadow">
-            <p className="text-gray-500">Total Transaksi</p>
+            <p>Total Transaksi</p>
             <p className="text-2xl font-bold">{data.length}</p>
           </div>
 
           <div className="bg-white p-6 rounded-xl shadow">
-            <p className="text-gray-500">Total Keuntungan</p>
+            <p>Total Keuntungan</p>
             <p className="text-2xl font-bold text-green-600">
               {rupiah(totalKeuntungan)}
             </p>
           </div>
-        </div>
 
-        {/* GRAFIK */}
-        <div className="bg-white p-6 rounded-xl shadow mb-6">
-          <h2 className="text-xl font-bold mb-4">
-            Grafik Keuntungan Bulanan
-          </h2>
-          <Bar data={chartData} />
-        </div>
-
-        {/* FILTER */}
-        <div className="bg-white p-4 rounded-xl shadow mb-6 flex flex-col md:flex-row gap-4">
-          <input
-            type="month"
-            value={filterBulan}
-            onChange={(e) => setFilterBulan(e.target.value)}
-            className="border p-2 rounded"
-          />
-          <input
-            placeholder="Cari No Polisi..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="border p-2 rounded flex-1"
-          />
-        </div>
-
-        {/* FORM */}
-        <div className="bg-white p-6 rounded-xl shadow mb-6 grid md:grid-cols-5 gap-4">
-          <input type="date"
-            value={form.tanggal}
-            onChange={(e)=>setForm({...form,tanggal:e.target.value})}
-            className="border p-2 rounded"/>
-
-          <input placeholder="No Polisi"
-            value={form.nopol}
-            onChange={(e)=>setForm({...form,nopol:e.target.value})}
-            className="border p-2 rounded"/>
-
-          <input type="number" placeholder="Harga Beli"
-            value={form.hargaBeli}
-            onChange={(e)=>setForm({...form,hargaBeli:e.target.value})}
-            className="border p-2 rounded"/>
-
-          <input type="number" placeholder="Biaya"
-            value={form.biaya}
-            onChange={(e)=>setForm({...form,biaya:e.target.value})}
-            className="border p-2 rounded"/>
-
-          <input type="number" placeholder="Harga Jual"
-            value={form.hargaJual}
-            onChange={(e)=>setForm({...form,hargaJual:e.target.value})}
-            className="border p-2 rounded"/>
-
-          <button
-            onClick={editId ? updateData : simpanData}
-            className="bg-blue-600 text-white py-2 rounded-lg md:col-span-5"
-          >
-            {editId ? "Update Transaksi" : "Tambah Transaksi"}
-          </button>
-        </div>
-
-        {/* TABLE */}
-        <div className="bg-white rounded-xl shadow overflow-x-auto">
-          <table className="w-full text-left">
-            <thead className="bg-gray-200">
-              <tr>
-                <th className="p-3">Tanggal</th>
-                <th className="p-3">NoPol</th>
-                <th className="p-3">Beli</th>
-                <th className="p-3">Biaya</th>
-                <th className="p-3">Jual</th>
-                <th className="p-3">Untung</th>
-                <th className="p-3">Aksi</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredData.map((item)=>(
-                <tr key={item.id} className="border-t">
-                  <td className="p-3">{item.tanggal}</td>
-                  <td className="p-3">{item.nopol}</td>
-                  <td className="p-3">{rupiah(item.hargaBeli)}</td>
-                  <td className="p-3">{rupiah(item.biaya)}</td>
-                  <td className="p-3">{rupiah(item.hargaJual)}</td>
-                  <td className="p-3 text-green-600 font-semibold">
-                    {rupiah(
-                      Number(item.hargaJual||0) -
-                      Number(item.hargaBeli||0) -
-                      Number(item.biaya||0)
-                    )}
-                  </td>
-                  <td className="p-3 space-x-2">
-                    <button
-                      onClick={()=>{setForm(item); setEditId(item.id);}}
-                      className="bg-yellow-500 text-white px-3 py-1 rounded"
-                    >
-                      Edit
-                    </button>
-                    <button
-                      onClick={()=>hapusData(item.id)}
-                      className="bg-red-500 text-white px-3 py-1 rounded"
-                    >
-                      Hapus
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <div className="bg-white p-6 rounded-xl shadow">
+            <p>Rata-rata Profit</p>
+            <p className="text-2xl font-bold text-blue-600">
+              {rupiah(rataRataUntung)}
+            </p>
+          </div>
         </div>
 
       </div>
