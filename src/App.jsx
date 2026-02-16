@@ -8,11 +8,10 @@ import autoTable from "jspdf-autotable";
 
 function App() {
   const [session, setSession] = useState(null);
+  const [role, setRole] = useState(null);
   const [data, setData] = useState([]);
   const [editId, setEditId] = useState(null);
-  const [role, setRole] = useState(null);
   const [darkMode, setDarkMode] = useState(false);
-
   const [search, setSearch] = useState("");
   const [filterBulan, setFilterBulan] = useState("");
 
@@ -42,10 +41,10 @@ function App() {
   // ================= LOAD DATA & ROLE =================
   useEffect(() => {
     if (session) {
-      loadData();
       fetchRole();
+      loadData();
     }
-  }, [session]);
+  }, [session, role]);
 
   const fetchRole = async () => {
     const { data } = await supabase
@@ -58,7 +57,10 @@ function App() {
   };
 
   const loadData = async () => {
-    let query = supabase.from("transaksi").select("*").order("id", { ascending: false });
+    let query = supabase
+      .from("transaksi")
+      .select("*")
+      .order("id", { ascending: false });
 
     if (role !== "admin") {
       query = query.eq("user_id", session.user.id);
@@ -68,17 +70,33 @@ function App() {
     setData(data || []);
   };
 
+  // ================= ACTIVITY LOG =================
+  const logActivity = async (actionText) => {
+    await supabase.from("activity_logs").insert([
+      {
+        user_id: session.user.id,
+        action: actionText,
+      },
+    ]);
+  };
+
   // ================= CRUD =================
   const simpanData = async () => {
     await supabase.from("transaksi").insert([
       { ...form, user_id: session.user.id },
     ]);
+
+    await logActivity("Tambah transaksi " + form.nopol);
+
     resetForm();
     loadData();
   };
 
   const updateData = async () => {
     await supabase.from("transaksi").update(form).eq("id", editId);
+
+    await logActivity("Update transaksi ID " + editId);
+
     setEditId(null);
     resetForm();
     loadData();
@@ -86,6 +104,9 @@ function App() {
 
   const hapusData = async (id) => {
     await supabase.from("transaksi").delete().eq("id", id);
+
+    await logActivity("Hapus transaksi ID " + id);
+
     loadData();
   };
 
@@ -150,7 +171,7 @@ function App() {
   // ================= EXPORT PDF =================
   const exportPDF = () => {
     const doc = new jsPDF();
-    doc.text("Laporan Pembukuan Mobil PRO 2.0", 14, 15);
+    doc.text("Laporan Pembukuan Mobil PRO 4.0", 14, 15);
 
     autoTable(doc, {
       startY: 20,
@@ -176,9 +197,10 @@ function App() {
     <div className={darkMode ? "bg-gray-900 text-white min-h-screen p-6" : "bg-gray-100 min-h-screen p-6"}>
       <div className="max-w-6xl mx-auto">
 
+        {/* HEADER */}
         <div className="flex justify-between items-center mb-6">
           <div>
-            <h1 className="text-3xl font-bold">Pembukuan Mobil PRO 2.0</h1>
+            <h1 className="text-3xl font-bold">Pembukuan Mobil PRO 4.0</h1>
             <p className="text-sm">Role: {role}</p>
           </div>
 
@@ -205,6 +227,7 @@ function App() {
           </div>
         </div>
 
+        {/* KPI */}
         <div className="grid md:grid-cols-3 gap-4 mb-6">
           <div className="bg-white p-6 rounded-xl shadow">
             <p>Total Transaksi</p>
