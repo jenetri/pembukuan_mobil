@@ -4,6 +4,27 @@ import Login from "./login";
 import * as XLSX from "xlsx";
 import { saveAs } from "file-saver";
 
+import {
+  Chart as ChartJS,
+  CategoryScale,
+  LinearScale,
+  BarElement,
+  Title,
+  Tooltip,
+  Legend,
+} from "chart.js";
+
+import { Bar } from "react-chartjs-2";
+
+ChartJS.register(
+  CategoryScale,
+  LinearScale,
+  BarElement,
+  Title,
+  Tooltip,
+  Legend
+);
+
 function App() {
   const [session, setSession] = useState(null);
   const [data, setData] = useState([]);
@@ -96,6 +117,7 @@ function App() {
     );
   }, 0);
 
+  // ================= FILTER =================
   const filteredData = data.filter((item) => {
     const cocokSearch = item.nopol
       ?.toLowerCase()
@@ -108,6 +130,35 @@ function App() {
     return cocokSearch && cocokBulan;
   });
 
+  // ================= GRAFIK =================
+  const keuntunganBulanan = {};
+
+  data.forEach((item) => {
+    const bulan = item.tanggal?.slice(0, 7);
+    const untung =
+      Number(item.hargaJual || 0) -
+      Number(item.hargaBeli || 0) -
+      Number(item.biaya || 0);
+
+    if (!keuntunganBulanan[bulan]) {
+      keuntunganBulanan[bulan] = 0;
+    }
+
+    keuntunganBulanan[bulan] += untung;
+  });
+
+  const chartData = {
+    labels: Object.keys(keuntunganBulanan),
+    datasets: [
+      {
+        label: "Keuntungan Bulanan",
+        data: Object.values(keuntunganBulanan),
+        backgroundColor: "rgba(34,197,94,0.6)",
+      },
+    ],
+  };
+
+  // ================= EXPORT =================
   const exportExcel = () => {
     const worksheet = XLSX.utils.json_to_sheet(filteredData);
     const workbook = XLSX.utils.book_new();
@@ -131,6 +182,7 @@ function App() {
     <div className="min-h-screen bg-gray-100 p-6">
       <div className="max-w-6xl mx-auto">
 
+        {/* HEADER */}
         <div className="flex justify-between items-center mb-6">
           <h1 className="text-3xl font-bold">Pembukuan Mobil</h1>
           <div className="flex gap-3">
@@ -147,6 +199,29 @@ function App() {
               Logout
             </button>
           </div>
+        </div>
+
+        {/* SUMMARY */}
+        <div className="grid md:grid-cols-2 gap-4 mb-6">
+          <div className="bg-white p-6 rounded-xl shadow">
+            <p className="text-gray-500">Total Transaksi</p>
+            <p className="text-2xl font-bold">{data.length}</p>
+          </div>
+
+          <div className="bg-white p-6 rounded-xl shadow">
+            <p className="text-gray-500">Total Keuntungan</p>
+            <p className="text-2xl font-bold text-green-600">
+              {rupiah(totalKeuntungan)}
+            </p>
+          </div>
+        </div>
+
+        {/* GRAFIK */}
+        <div className="bg-white p-6 rounded-xl shadow mb-6">
+          <h2 className="text-xl font-bold mb-4">
+            Grafik Keuntungan Bulanan
+          </h2>
+          <Bar data={chartData} />
         </div>
 
         {/* FILTER */}
@@ -167,11 +242,13 @@ function App() {
 
         {/* FORM */}
         <div className="bg-white p-6 rounded-xl shadow mb-6 grid md:grid-cols-5 gap-4">
-          <input type="date" value={form.tanggal}
+          <input type="date"
+            value={form.tanggal}
             onChange={(e)=>setForm({...form,tanggal:e.target.value})}
             className="border p-2 rounded"/>
 
-          <input placeholder="No Polisi" value={form.nopol}
+          <input placeholder="No Polisi"
+            value={form.nopol}
             onChange={(e)=>setForm({...form,nopol:e.target.value})}
             className="border p-2 rounded"/>
 
