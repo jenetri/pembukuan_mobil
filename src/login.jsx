@@ -1,12 +1,23 @@
 import { useState } from "react";
 import { supabase } from "./supabaseClient";
 
-function Login({ setSession }) {
+export default function Login({ setSession }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
 
-  const handleLogin = async () => {
-    const { data, error } = await supabase.auth.signInWithPassword({
+  const login = async () => {
+    const { error } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
+
+    if (error) {
+      alert(error.message);
+    }
+  };
+
+  const register = async () => {
+    const { error } = await supabase.auth.signUp({
       email,
       password,
     });
@@ -14,21 +25,22 @@ function Login({ setSession }) {
     if (error) {
       alert(error.message);
     } else {
-      setSession(data.session);
+      alert("Registrasi berhasil, silakan login.");
     }
   };
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-100">
-      <div className="bg-white p-8 rounded-xl shadow w-80">
+      <div className="bg-white p-8 rounded-xl shadow w-96">
         <h2 className="text-2xl font-bold mb-6 text-center">
-          Login
+          Login Pembukuan
         </h2>
 
         <input
           type="email"
           placeholder="Email"
-          className="w-full border p-2 rounded mb-4"
+          className="w-full border p-2 rounded mb-3"
+          value={email}
           onChange={(e) => setEmail(e.target.value)}
         />
 
@@ -36,18 +48,24 @@ function Login({ setSession }) {
           type="password"
           placeholder="Password"
           className="w-full border p-2 rounded mb-4"
+          value={password}
           onChange={(e) => setPassword(e.target.value)}
         />
 
         <button
-          onClick={handleLogin}
-          className="w-full bg-blue-600 text-white py-2 rounded-lg"
+          onClick={login}
+          className="w-full bg-blue-600 text-white py-2 rounded mb-2"
         >
           Login
+        </button>
+
+        <button
+          onClick={register}
+          className="w-full bg-green-600 text-white py-2 rounded"
+        >
+          Register
         </button>
       </div>
     </div>
   );
 }
-
-export default Login;

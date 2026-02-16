@@ -9,6 +9,9 @@ function App() {
   const [data, setData] = useState([]);
   const [editId, setEditId] = useState(null);
 
+  const [search, setSearch] = useState("");
+  const [filterBulan, setFilterBulan] = useState("");
+
   const [form, setForm] = useState({
     tanggal: "",
     nopol: "",
@@ -34,9 +37,7 @@ function App() {
 
   // ================= LOAD DATA =================
   useEffect(() => {
-    if (session) {
-      loadData();
-    }
+    if (session) loadData();
   }, [session]);
 
   const loadData = async () => {
@@ -54,14 +55,12 @@ function App() {
     await supabase.from("transaksi").insert([
       { ...form, user_id: session.user.id },
     ]);
-
     resetForm();
     loadData();
   };
 
   const updateData = async () => {
     await supabase.from("transaksi").update(form).eq("id", editId);
-
     setEditId(null);
     resetForm();
     loadData();
@@ -97,21 +96,20 @@ function App() {
     );
   }, 0);
 
-  // ================= EXPORT =================
-  const exportExcel = () => {
-    const exportData = data.map((item) => ({
-      Tanggal: item.tanggal,
-      NoPol: item.nopol,
-      HargaBeli: item.hargaBeli,
-      Biaya: item.biaya,
-      HargaJual: item.hargaJual,
-      Keuntungan:
-        Number(item.hargaJual || 0) -
-        Number(item.hargaBeli || 0) -
-        Number(item.biaya || 0),
-    }));
+  const filteredData = data.filter((item) => {
+    const cocokSearch = item.nopol
+      ?.toLowerCase()
+      .includes(search.toLowerCase());
 
-    const worksheet = XLSX.utils.json_to_sheet(exportData);
+    const cocokBulan = filterBulan
+      ? item.tanggal?.startsWith(filterBulan)
+      : true;
+
+    return cocokSearch && cocokBulan;
+  });
+
+  const exportExcel = () => {
+    const worksheet = XLSX.utils.json_to_sheet(filteredData);
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, "Laporan");
 
@@ -127,18 +125,14 @@ function App() {
     saveAs(file, "Laporan_Pembukuan.xlsx");
   };
 
-  if (!session) {
-    return <Login setSession={setSession} />;
-  }
+  if (!session) return <Login setSession={setSession} />;
 
   return (
     <div className="min-h-screen bg-gray-100 p-6">
       <div className="max-w-6xl mx-auto">
 
-        {/* HEADER */}
         <div className="flex justify-between items-center mb-6">
           <h1 className="text-3xl font-bold">Pembukuan Mobil</h1>
-
           <div className="flex gap-3">
             <button
               onClick={exportExcel}
@@ -146,7 +140,6 @@ function App() {
             >
               Export Excel
             </button>
-
             <button
               onClick={() => supabase.auth.signOut()}
               className="bg-red-500 text-white px-4 py-2 rounded-lg"
@@ -156,30 +149,29 @@ function App() {
           </div>
         </div>
 
-        {/* SUMMARY */}
-        <div className="grid md:grid-cols-2 gap-4 mb-6">
-          <div className="bg-white p-6 rounded-xl shadow">
-            <p className="text-gray-500">Total Transaksi</p>
-            <p className="text-2xl font-bold">{data.length}</p>
-          </div>
-
-          <div className="bg-white p-6 rounded-xl shadow">
-            <p className="text-gray-500">Total Keuntungan</p>
-            <p className="text-2xl font-bold text-green-600">
-              {rupiah(totalKeuntungan)}
-            </p>
-          </div>
+        {/* FILTER */}
+        <div className="bg-white p-4 rounded-xl shadow mb-6 flex flex-col md:flex-row gap-4">
+          <input
+            type="month"
+            value={filterBulan}
+            onChange={(e) => setFilterBulan(e.target.value)}
+            className="border p-2 rounded"
+          />
+          <input
+            placeholder="Cari No Polisi..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="border p-2 rounded flex-1"
+          />
         </div>
 
         {/* FORM */}
         <div className="bg-white p-6 rounded-xl shadow mb-6 grid md:grid-cols-5 gap-4">
-          <input type="date"
-            value={form.tanggal}
+          <input type="date" value={form.tanggal}
             onChange={(e)=>setForm({...form,tanggal:e.target.value})}
             className="border p-2 rounded"/>
 
-          <input placeholder="No Polisi"
-            value={form.nopol}
+          <input placeholder="No Polisi" value={form.nopol}
             onChange={(e)=>setForm({...form,nopol:e.target.value})}
             className="border p-2 rounded"/>
 
@@ -221,7 +213,7 @@ function App() {
               </tr>
             </thead>
             <tbody>
-              {data.map((item)=>(
+              {filteredData.map((item)=>(
                 <tr key={item.id} className="border-t">
                   <td className="p-3">{item.tanggal}</td>
                   <td className="p-3">{item.nopol}</td>
@@ -230,22 +222,18 @@ function App() {
                   <td className="p-3">{rupiah(item.hargaJual)}</td>
                   <td className="p-3 text-green-600 font-semibold">
                     {rupiah(
-                      Number(item.hargaJual || 0) -
-                      Number(item.hargaBeli || 0) -
-                      Number(item.biaya || 0)
+                      Number(item.hargaJual||0) -
+                      Number(item.hargaBeli||0) -
+                      Number(item.biaya||0)
                     )}
                   </td>
                   <td className="p-3 space-x-2">
                     <button
-                      onClick={()=>{
-                        setForm(item);
-                        setEditId(item.id);
-                      }}
+                      onClick={()=>{setForm(item); setEditId(item.id);}}
                       className="bg-yellow-500 text-white px-3 py-1 rounded"
                     >
                       Edit
                     </button>
-
                     <button
                       onClick={()=>hapusData(item.id)}
                       className="bg-red-500 text-white px-3 py-1 rounded"
